@@ -2,10 +2,20 @@ from pydantic import BaseModel, Field
 from typing import Optional
 
 
-class RifleProfile(BaseModel):
+class RifleBase(BaseModel):
     name: str = Field(..., example="6.5 CM - 143gr ELD-X")
     zero_yards: float = Field(..., example=200)
     muzzle_velocity_fps: float = Field(..., example=2700)
+
+
+class RifleCreate(RifleBase):
+    """Payload for creating a rifle."""
+    pass
+
+
+class Rifle(RifleBase):
+    """Rifle as returned from the API, with an ID."""
+    id: str = Field(..., example="rifle_1")
 
 
 class ShotCalculationRequest(BaseModel):
@@ -16,7 +26,7 @@ class ShotCalculationRequest(BaseModel):
         example=90,
         description="Angle between shot direction and wind (90 = full crosswind)"
     )
-    rifle: RifleProfile
+    rifle: RifleBase  # notice: we don't need the rifle ID here, just its ballistics
 
 
 class ShotCalculationResponse(BaseModel):

@@ -1,9 +1,11 @@
 from fastapi import FastAPI
 from .schemas import ShotCalculationRequest, ShotCalculationResponse
+from app.routers import rifles
 from .ballistics import compute_drop, compute_wind_drift
 
 app = FastAPI(title="ShotTracker Ballistics API - Phase 1")
 
+app.include_router(rifles.router)
 
 @app.get("/health")
 def health():
