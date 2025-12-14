@@ -9,8 +9,10 @@ import {
   ActivityIndicator,
   Alert,
   ScrollView,
+  TouchableOpacity,
 } from "react-native";
 import DropDownPicker from "react-native-dropdown-picker";
+import * as Location from "expo-location";
 
 const BACKEND_URL = "http://127.0.0.1:8000";
 
@@ -362,9 +364,147 @@ export default function App() {
   const [loadingRifles, setLoadingRifles] = useState<boolean>(false);
   const [calculating, setCalculating] = useState<boolean>(false);
   const [result, setResult] = useState<ShotResult | null>(null);
+  const [loadingWeather, setLoadingWeather] = useState<boolean>(false);
+  const [shootingDirection, setShootingDirection] = useState<number | null>(null);
+  const [windDirection, setWindDirection] = useState<number | null>(null);
 
   // state for dropdown
   const [rifleDropdownOpen, setRifleDropdownOpen] = useState(false);
+
+  // Fetch weather data based on location
+  const fetchWeatherData = async () => {
+    try {
+      setLoadingWeather(true);
+      
+      // Request location permissions
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== "granted") {
+        Alert.alert(
+          "Permission Denied",
+          "Location permission is required to fetch local wind conditions."
+        );
+        setLoadingWeather(false);
+        return;
+      }
+
+      // Get current location
+      const location = await Location.getCurrentPositionAsync({});
+      const { latitude, longitude } = location.coords;
+
+      // Fetch weather data from Open-Meteo (free, no API key required)
+      // Open-Meteo returns wind speed in m/s by default (wind_speed_10m is in m/s)
+      // We need to convert m/s to mph: 1 m/s = 2.237 mph
+      const weatherUrl = `https://api.open-meteo.com/v1/forecast?latitude=${latitude}&longitude=${longitude}&current=wind_speed_10m,wind_direction_10m`;
+      
+      const response = await fetch(weatherUrl);
+      if (!response.ok) {
+        throw new Error(`Weather API error: ${response.status}`);
+      }
+
+      const data = await response.json();
+      const windSpeedMs = data.current?.wind_speed_10m; // Wind speed in m/s
+      const apiWindDirection = data.current?.wind_direction_10m; // Wind direction in degrees (0-360, where 0° = North)
+
+      if (windSpeedMs !== undefined) {
+        // Convert m/s to mph: 1 m/s = 2.23694 mph
+        const windSpeedMph = windSpeedMs * 2.23694;
+        const roundedSpeed = Math.round(windSpeedMph * 10) / 10; // Round to 1 decimal
+        setWindSpeedMph(roundedSpeed.toString());
+        
+        // Store wind direction for angle calculation
+        if (apiWindDirection !== undefined && apiWindDirection !== null) {
+          setWindDirection(apiWindDirection);
+          
+          // If we already have a shooting direction, calculate the angle automatically
+          if (shootingDirection !== null) {
+            const relativeAngle = calculateWindAngle(shootingDirection, apiWindDirection);
+            setWindAngleDeg(relativeAngle.toString());
+          }
+        }
+        
+        const directionText = apiWindDirection ? `${Math.round(apiWindDirection)}°` : 'N/A';
+        Alert.alert(
+          "Weather Data Loaded",
+          `Wind Speed: ${roundedSpeed} mph\nWind Direction: ${directionText}\n\n${shootingDirection !== null ? 'Wind angle calculated automatically!' : 'Point your phone at the target to calculate wind angle.'}`
+        );
+      } else {
+        throw new Error("Wind speed data not available");
+      }
+    } catch (err: any) {
+      console.error("Weather fetch error:", err);
+      Alert.alert(
+        "Weather Fetch Failed",
+        err.message ?? "Unable to fetch weather data. Please enter wind speed manually."
+      );
+    } finally {
+      setLoadingWeather(false);
+    }
+  };
+
+  // Calculate wind angle relative to shooting direction
+  // shootingDir and windDir are in degrees (0-360, where 0° = North)
+  // Returns angle in degrees where 90° = full crosswind
+  const calculateWindAngle = (shootingDir: number, windDir: number): number => {
+    // Calculate the difference between wind direction and shooting direction
+    // This gives us the angle between them
+    let angle = Math.abs(windDir - shootingDir);
+    
+    // Handle wrap-around (e.g., 350° and 10° should be 20°, not 340°)
+    if (angle > 180) {
+      angle = 360 - angle;
+    }
+    
+    // The angle is already what we want: 0° = head/tail wind, 90° = full crosswind
+    return Math.round(angle);
+  };
+
+  // Get shooting direction using phone compass
+  const setShootingDirectionFromCompass = async () => {
+    try {
+      // Request location permissions (required for compass/heading)
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== "granted") {
+        Alert.alert(
+          "Permission Denied",
+          "Location permission is required to use the compass for shooting direction."
+        );
+        return;
+      }
+
+      // Get heading using Location API
+      // Note: This requires the device to support compass/heading
+      const heading = await Location.getHeadingAsync();
+      
+      if (heading.magHeading !== null && heading.magHeading !== undefined) {
+        // magHeading is in degrees (0-360, where 0° = North)
+        setShootingDirection(heading.magHeading);
+        
+        // If we have wind direction, calculate the angle automatically
+        if (windDirection !== null) {
+          const relativeAngle = calculateWindAngle(heading.magHeading, windDirection);
+          setWindAngleDeg(relativeAngle.toString());
+          
+          Alert.alert(
+            "Shooting Direction Set",
+            `Direction: ${Math.round(heading.magHeading)}°\nWind Angle: ${relativeAngle}°\n\n${relativeAngle >= 70 && relativeAngle <= 110 ? 'Full crosswind!' : relativeAngle < 45 || relativeAngle > 135 ? 'Head/tail wind' : 'Partial crosswind'}`
+          );
+        } else {
+          Alert.alert(
+            "Shooting Direction Set",
+            `Direction: ${Math.round(heading.magHeading)}°\n\nFetch weather data to calculate wind angle automatically.`
+          );
+        }
+      } else {
+        throw new Error("Compass heading not available");
+      }
+    } catch (err: any) {
+      console.error("Compass error:", err);
+      Alert.alert(
+        "Compass Error",
+        err.message ?? "Unable to get compass heading. Make sure your device has a compass."
+      );
+    }
+  };
 
   // Load rifles on mount
   useEffect(() => {
@@ -515,7 +655,20 @@ export default function App() {
           </View>
 
           <View style={styles.inputRow}>
-            <Text style={styles.label}>Wind Speed (mph)</Text>
+            <View style={styles.windSpeedRow}>
+              <Text style={styles.label}>Wind Speed (mph)</Text>
+              <TouchableOpacity
+                style={styles.weatherButton}
+                onPress={fetchWeatherData}
+                disabled={loadingWeather}
+              >
+                {loadingWeather ? (
+                  <ActivityIndicator size="small" color="#F9FAFB" />
+                ) : (
+                  <Text style={styles.weatherButtonText}>Get from Location</Text>
+                )}
+              </TouchableOpacity>
+            </View>
             <TextInput
               style={styles.input}
               keyboardType="numeric"
@@ -525,8 +678,16 @@ export default function App() {
           </View>
 
           <View style={styles.inputRow}>
-            <Text style={styles.label}>Wind Angle (deg)</Text>
-            <Text style={styles.subLabel}>90 = full crosswind</Text>
+            <View style={styles.windSpeedRow}>
+              <Text style={styles.label}>Wind Angle (deg)</Text>
+              <TouchableOpacity
+                style={styles.weatherButton}
+                onPress={setShootingDirectionFromCompass}
+              >
+                <Text style={styles.weatherButtonText}>Set Shooting Direction</Text>
+              </TouchableOpacity>
+            </View>
+            <Text style={styles.subLabel}>90 = full crosswind • Point phone at target, then tap above</Text>
             <TextInput
               style={styles.input}
               keyboardType="numeric"
@@ -648,9 +809,26 @@ const styles = StyleSheet.create({
   inputRow: {
     marginBottom: 12,
   },
+  windSpeedRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 4,
+  },
   label: {
     color: "#D1D5DB",
     fontSize: 14,
+  },
+  weatherButton: {
+    backgroundColor: "#3B82F6",
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 6,
+  },
+  weatherButtonText: {
+    color: "#F9FAFB",
+    fontSize: 12,
+    fontWeight: "600",
   },
   subLabel: {
     color: "#9CA3AF",
