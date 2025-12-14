@@ -55,25 +55,44 @@ def compute_wind_drift(
     wind_angle_deg: float
 ) -> dict:
     """
-    Very simple wind drift model:
+    Improved wind drift model using velocity-dependent formula.
     - Compute crosswind component based on wind_angle_deg (0 = head/tail, 90 = full crosswind).
-    - Assume drift ≈ crosswind_speed * time_of_flight (ignores drag & bullet slowdown).
+    - Uses simplified formula: drift ≈ (wind_speed × distance² × wind_value) / velocity_factor
+    - Velocity factor accounts for faster bullets being less affected by wind.
     Returns drift in inches & MOA, with sign convention: positive = right, negative = left.
     """
-    t = compute_time_of_flight(distance_yards, muzzle_velocity_fps)
-
-    # Wind components
-    wind_speed_mps = wind_speed_mph * MPH_TO_MPS
     theta_rad = math.radians(wind_angle_deg)
+    
+    # Crosswind component (wind value: 0 = no effect, 1.0 = full crosswind)
+    wind_value = abs(math.sin(theta_rad))
+    
+    # Wind direction sign: positive = wind from left (pushes bullet right), negative = wind from right
+    wind_direction = 1.0 if math.sin(theta_rad) >= 0 else -1.0
+    
+    # Improved wind drift formula using velocity-scaled approximation
+    # Formula calibrated to match typical rifle ballistics
+    # For reference: .308 @ 2700 fps, 10 mph crosswind @ 300yd ≈ 15-16 inches drift
+    
+    # Distance in hundreds of yards (for distance squared relationship)
+    distance_hundreds = distance_yards / 100.0
+    
+    # Velocity scaling factor: faster bullets drift less
+    # Using inverse relationship: drift ∝ 1/velocity^0.8 (approximate)
+    velocity_normalized = muzzle_velocity_fps / 2700.0  # Normalize to typical 2700 fps
+    velocity_factor = velocity_normalized ** 0.8
+    
+    # Base wind drift formula: wind_speed × distance² × wind_value × base_constant / velocity_factor
+    # Base constant calibrated to give ~15 inches at 10 mph crosswind, 300yd, 2700 fps
+    # 15 = (10 × 3² × 1.0 × base_constant) / 1.0 → base_constant = 15/90 = 0.167
+    base_constant = 0.167
+    
+    # Wind drift increases with square of distance and wind speed
+    drift_inches = (wind_speed_mph * (distance_hundreds ** 2) * wind_value * base_constant) / velocity_factor
+    
+    # Apply wind direction
+    drift_inches = drift_inches * wind_direction
 
-    # Crosswind component (perpendicular to bullet path)
-    crosswind_mps = wind_speed_mps * math.sin(theta_rad)
-
-    # Drift ≈ crosswind_speed * time_of_flight
-    drift_m = crosswind_mps * t
-    drift_inches = drift_m * INCHES_PER_METER
-
-    # Convert inches to MOA at distance
+    # Convert inches to MOA at given distance
     moa_per_inch_at_100 = 1 / 1.047
     distance_factor = distance_yards / 100.0
     drift_moa = drift_inches * moa_per_inch_at_100 / distance_factor

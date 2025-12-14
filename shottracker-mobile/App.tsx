@@ -31,6 +31,326 @@ type ShotResult = {
   drift_moa: number;
 };
 
+// Crosshair component to visualize aim adjustments
+interface CrosshairProps {
+  dropMoa: number;
+  driftMoa: number;
+  dropInches: number;
+  driftInches: number;
+  distanceYards: number;
+}
+
+const CROSSHAIR_SIZE = 300;
+const MOA_SCALE = 20; // pixels per MOA for visualization
+// 1 MIL = 3.437746770784928 MOA (exact conversion)
+const MIL_TO_MOA = 3.437746770784928;
+const MIL_SCALE = MOA_SCALE * MIL_TO_MOA; // pixels per MIL (~68.75 pixels per MIL)
+
+// Helper function to convert inches to feet and inches format (rounded to nearest inch)
+function formatFeetInches(inches: number): string {
+  if (inches === undefined || inches === null || isNaN(inches)) {
+    return "0\"";
+  }
+  // Round to nearest inch
+  const roundedInches = Math.round(inches);
+  const feet = Math.floor(Math.abs(roundedInches) / 12);
+  const remainingInches = Math.abs(roundedInches) % 12;
+  const sign = roundedInches < 0 ? "-" : "";
+  
+  if (feet === 0) {
+    return `${sign}${remainingInches}"`;
+  } else {
+    return `${sign}${feet}' ${remainingInches}"`;
+  }
+}
+
+function CrosshairDisplay({
+  dropMoa,
+  driftMoa,
+  dropInches,
+  driftInches,
+  distanceYards,
+}: CrosshairProps) {
+  // Convert MOA to pixels (1 MOA = ~1 inch at 100 yards, scaled for visualization)
+  // dropMoa positive = bullet drops MORE (hits lower), so we need to aim HIGHER to compensate
+  // driftMoa positive = bullet drifts RIGHT, so we need to aim LEFT to compensate
+  // For drop: put mark BELOW center, so when you put mark on target, center is above (aiming high)
+  // For drift: put mark LEFT of center, so when you put mark on target, center is right (aiming left)
+  const dropPixels = dropMoa * MOA_SCALE; // Positive = below center (compensates for drop)
+  const driftPixels = -driftMoa * MOA_SCALE; // Negative = left of center (compensates for right drift)
+  
+  // Clamp values to keep within reasonable bounds
+  const maxOffset = CROSSHAIR_SIZE * 0.35;
+  const clampedDropPixels = Math.max(-maxOffset, Math.min(maxOffset, dropPixels));
+  const clampedDriftPixels = Math.max(-maxOffset, Math.min(maxOffset, driftPixels));
+
+  return (
+    <View style={crosshairStyles.container}>
+      <Text style={crosshairStyles.title}>Aiming Reticle</Text>
+      <View style={crosshairStyles.crosshairWrapper}>
+        {/* Container that allows aim point to extend beyond circle */}
+        <View style={crosshairStyles.crosshairContainer}>
+          {/* Crosshair background circle */}
+          <View style={crosshairStyles.circle}>
+            {/* Main horizontal line (thick) */}
+            <View style={[crosshairStyles.mainLine, crosshairStyles.horizontalLine]} />
+            {/* Main vertical line (thick) */}
+            <View style={[crosshairStyles.mainLine, crosshairStyles.verticalLine]} />
+            
+            {/* MIL hash marks on horizontal line (extend vertically from horizontal line) */}
+            {[1, 2, 3].map((mil) => {
+              const hashHeight = mil === 1 ? 8 : mil === 2 ? 10 : 12;
+              return (
+                <React.Fragment key={`h-${mil}`}>
+                  {/* Right side hash marks */}
+                  <View
+                    style={[
+                      crosshairStyles.milHash,
+                      crosshairStyles.horizontalMilHash,
+                      {
+                        left: CROSSHAIR_SIZE / 2 + mil * MIL_SCALE - 0.5,
+                        top: CROSSHAIR_SIZE / 2 - hashHeight / 2,
+                        height: hashHeight,
+                        width: 1,
+                      },
+                    ]}
+                  />
+                  {/* Left side hash marks */}
+                  <View
+                    style={[
+                      crosshairStyles.milHash,
+                      crosshairStyles.horizontalMilHash,
+                      {
+                        left: CROSSHAIR_SIZE / 2 - mil * MIL_SCALE - 0.5,
+                        top: CROSSHAIR_SIZE / 2 - hashHeight / 2,
+                        height: hashHeight,
+                        width: 1,
+                      },
+                    ]}
+                  />
+                </React.Fragment>
+              );
+            })}
+            
+            {/* MIL hash marks on vertical line (extend horizontally from vertical line, primarily below for drop) */}
+            {[1, 2, 3, 4, 5].map((mil) => {
+              const hashWidth = mil === 1 ? 8 : mil <= 2 ? 10 : 12;
+              return (
+                <React.Fragment key={`v-${mil}`}>
+                  {/* Below center (drop direction) */}
+                  <View
+                    style={[
+                      crosshairStyles.milHash,
+                      crosshairStyles.verticalMilHash,
+                      {
+                        top: CROSSHAIR_SIZE / 2 + mil * MIL_SCALE - 0.5,
+                        left: CROSSHAIR_SIZE / 2 - hashWidth / 2,
+                        width: hashWidth,
+                        height: 1,
+                      },
+                    ]}
+                  />
+                  {/* Above center (shorter marks) */}
+                  {mil <= 3 && (
+                    <View
+                      style={[
+                        crosshairStyles.milHash,
+                        crosshairStyles.verticalMilHash,
+                        {
+                          top: CROSSHAIR_SIZE / 2 - mil * MIL_SCALE - 0.5,
+                          left: CROSSHAIR_SIZE / 2 - 4,
+                          width: 8,
+                          height: 1,
+                        },
+                      ]}
+                    />
+                  )}
+                </React.Fragment>
+              );
+            })}
+            
+            {/* Center dot (zero point) */}
+            <View style={crosshairStyles.centerDot} />
+            
+            {/* Drop indicator line (vertical) - from center to aim point */}
+            {Math.abs(clampedDropPixels) > 2 && (
+              <View
+                style={[
+                  crosshairStyles.indicatorLine,
+                  {
+                    top: clampedDropPixels > 0 
+                      ? CROSSHAIR_SIZE / 2 
+                      : CROSSHAIR_SIZE / 2 + clampedDropPixels,
+                    left: CROSSHAIR_SIZE / 2 - 1,
+                    height: Math.abs(clampedDropPixels),
+                    backgroundColor: dropMoa > 0 ? "#EF4444" : "#10B981",
+                  },
+                ]}
+              />
+            )}
+            
+            {/* Drift indicator line (horizontal) - from center to aim point */}
+            {Math.abs(clampedDriftPixels) > 2 && (
+              <View
+                style={[
+                  crosshairStyles.indicatorLine,
+                  {
+                    top: CROSSHAIR_SIZE / 2 - 1,
+                    left: clampedDriftPixels > 0 
+                      ? CROSSHAIR_SIZE / 2 
+                      : CROSSHAIR_SIZE / 2 + clampedDriftPixels,
+                    width: Math.abs(clampedDriftPixels),
+                    backgroundColor: driftMoa > 0 ? "#3B82F6" : "#F59E0B",
+                  },
+                ]}
+              />
+            )}
+          </View>
+          
+          {/* Aim adjustment point (outside circle to allow it to extend) */}
+          <View
+            style={[
+              crosshairStyles.aimPoint,
+              {
+                top: CROSSHAIR_SIZE / 2 + clampedDropPixels,
+                left: CROSSHAIR_SIZE / 2 + clampedDriftPixels,
+              },
+            ]}
+          />
+        </View>
+        
+        {/* Labels */}
+        <View style={crosshairStyles.labelsContainer}>
+          <View style={crosshairStyles.labelRow}>
+            <Text style={[crosshairStyles.label, { color: "#EF4444" }]}>
+              {dropMoa > 0 ? "↑ Aim High" : dropMoa < 0 ? "↓ Aim Low" : "No adjustment"}: {formatFeetInches(dropInches)} ({Math.abs(dropMoa).toFixed(2)} MOA)
+            </Text>
+          </View>
+          {Math.abs(driftMoa) > 0.01 && (
+            <View style={crosshairStyles.labelRow}>
+              <Text style={[crosshairStyles.label, { color: driftMoa > 0 ? "#3B82F6" : "#F59E0B" }]}>
+                {driftMoa > 0 ? "← Aim Left" : "→ Aim Right"}: {formatFeetInches(driftInches)} ({Math.abs(driftMoa).toFixed(2)} MOA)
+              </Text>
+            </View>
+          )}
+          <View style={crosshairStyles.labelRow}>
+            <Text style={crosshairStyles.instruction}>
+              Aim at the green dot • Center is zero point • MIL hash marks for ranging
+            </Text>
+          </View>
+        </View>
+      </View>
+    </View>
+  );
+}
+
+const crosshairStyles = StyleSheet.create({
+  container: {
+    backgroundColor: "#1F2937",
+    padding: 16,
+    borderRadius: 8,
+    marginBottom: 16,
+    alignItems: "center",
+  },
+  title: {
+    fontSize: 18,
+    fontWeight: "600",
+    color: "#E5E7EB",
+    marginBottom: 16,
+  },
+  crosshairWrapper: {
+    alignItems: "center",
+    width: "100%",
+  },
+  crosshairContainer: {
+    width: CROSSHAIR_SIZE,
+    height: CROSSHAIR_SIZE,
+    position: "relative",
+    marginVertical: 20, // Add margin to allow aim point to extend beyond
+  },
+  circle: {
+    width: CROSSHAIR_SIZE,
+    height: CROSSHAIR_SIZE,
+    borderRadius: CROSSHAIR_SIZE / 2,
+    borderWidth: 2,
+    borderColor: "#9CA3AF",
+    backgroundColor: "#F3F4F6", // Light gray background for better contrast
+    position: "relative",
+  },
+  line: {
+    position: "absolute",
+    backgroundColor: "#6B7280",
+  },
+  mainLine: {
+    position: "absolute",
+    backgroundColor: "#000000", // Black for main crosshairs
+  },
+  horizontalLine: {
+    width: CROSSHAIR_SIZE,
+    height: 2, // Thicker main line
+    top: CROSSHAIR_SIZE / 2 - 1,
+    left: 0,
+  },
+  verticalLine: {
+    width: 2, // Thicker main line
+    height: CROSSHAIR_SIZE,
+    top: 0,
+    left: CROSSHAIR_SIZE / 2 - 1,
+  },
+  milHash: {
+    position: "absolute",
+    backgroundColor: "#000000", // Black hash marks
+  },
+  horizontalMilHash: {
+    // Width and height set dynamically
+  },
+  verticalMilHash: {
+    // Width and height set dynamically
+  },
+  centerDot: {
+    position: "absolute",
+    width: 4,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: "#9CA3AF",
+    top: CROSSHAIR_SIZE / 2 - 2,
+    left: CROSSHAIR_SIZE / 2 - 2,
+  },
+  aimPoint: {
+    position: "absolute",
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: "#22C55E", // Green to match scope reticle
+    borderWidth: 1,
+    borderColor: "#000000",
+    transform: [{ translateX: -4 }, { translateY: -4 }],
+    zIndex: 10,
+  },
+  indicatorLine: {
+    position: "absolute",
+  },
+  labelsContainer: {
+    marginTop: 16,
+    width: "100%",
+    alignItems: "center",
+  },
+  labelRow: {
+    marginBottom: 8,
+  },
+  label: {
+    fontSize: 14,
+    fontWeight: "600",
+    textAlign: "center",
+  },
+  instruction: {
+    fontSize: 12,
+    color: "#9CA3AF",
+    textAlign: "center",
+    fontStyle: "italic",
+  },
+});
+
 export default function App() {
   const [rifles, setRifles] = useState<Rifle[]>([]);
   const [selectedRifleId, setSelectedRifleId] = useState<string | null>(null);
@@ -225,33 +545,43 @@ export default function App() {
         </View>
 
         {result && (
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Result</Text>
+          <>
+            <CrosshairDisplay
+              dropMoa={result.drop_moa}
+              driftMoa={result.drift_moa}
+              dropInches={result.drop_inches}
+              driftInches={result.drift_inches}
+              distanceYards={result.distance_yards}
+            />
 
-            <Text style={styles.resultText}>
-              Distance: {result.distance_yards.toFixed(0)} yd
-            </Text>
-            <Text style={styles.resultText}>
-              Wind: {result.wind_speed_mph.toFixed(1)} mph @{" "}
-              {result.wind_angle_deg.toFixed(0)}°
-            </Text>
+            <View style={styles.section}>
+              <Text style={styles.sectionTitle}>Detailed Results</Text>
 
-            <View style={styles.resultBlock}>
-              <Text style={styles.resultHeader}>Drop</Text>
               <Text style={styles.resultText}>
-                {result.drop_inches.toFixed(2)}" ({result.drop_moa.toFixed(2)}{" "}
-                MOA)
+                Distance: {result.distance_yards.toFixed(0)} yd
               </Text>
-            </View>
-
-            <View style={styles.resultBlock}>
-              <Text style={styles.resultHeader}>Drift</Text>
               <Text style={styles.resultText}>
-                {result.drift_inches.toFixed(2)}" ({result.drift_moa.toFixed(2)}{" "}
-                MOA)
+                Wind: {result.wind_speed_mph.toFixed(1)} mph @{" "}
+                {result.wind_angle_deg.toFixed(0)}°
               </Text>
+
+              <View style={styles.resultBlock}>
+                <Text style={styles.resultHeader}>Drop</Text>
+                <Text style={styles.resultText}>
+                  {formatFeetInches(result.drop_inches)} ({result.drop_moa.toFixed(2)}{" "}
+                  MOA)
+                </Text>
+              </View>
+
+              <View style={styles.resultBlock}>
+                <Text style={styles.resultHeader}>Drift</Text>
+                <Text style={styles.resultText}>
+                  {formatFeetInches(result.drift_inches)} ({result.drift_moa.toFixed(2)}{" "}
+                  MOA)
+                </Text>
+              </View>
             </View>
-          </View>
+          </>
         )}
       </ScrollView>
     </SafeAreaView>
@@ -290,7 +620,7 @@ const styles = StyleSheet.create({
     fontSize: 14,
   },
   dropdownWrapper: {
-    zIndex: 10, // helps dropdown render above other content
+    zIndex: 10,
   },
   dropdown: {
     backgroundColor: "#111827",
